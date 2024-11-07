@@ -220,6 +220,10 @@ typedef unsigned sz_ssize_t; // 32-bit.
 
 #endif // SZ_AVOID_LIBC
 
+// The number of bytes to use with SWAR, either 4 or 8 depending on whether the platform is 32 or 64 bit. For use when
+// doing SWAR using `sz_size_t` rather than the explicitly sized variants (`sz_u32_t`, `sz_u64_t`)
+#define SZ_SWAR_BYTES sizeof(sz_size_t)
+
 /**
  *  @brief  Compile-time assert macro similar to `static_assert` in C++.
  */
@@ -1155,7 +1159,7 @@ SZ_PUBLIC void sz_sort_intro(sz_sequence_t *sequence, sz_sequence_comparator_t l
 #endif
 
 #ifndef SZ_USE_ARM_NEON
-#ifdef __ARM_NEON
+#if defined(__ARM_NEON) || defined(_M_ARM64)
 #define SZ_USE_ARM_NEON 1
 #else
 #define SZ_USE_ARM_NEON 0
@@ -1163,9 +1167,29 @@ SZ_PUBLIC void sz_sort_intro(sz_sequence_t *sequence, sz_sequence_comparator_t l
 #endif
 
 #ifndef SZ_USE_ARM_SVE
-#ifdef __ARM_FEATURE_SVE
+#if defined(__ARM_FEATURE_SVE)
 #define SZ_USE_ARM_SVE 1
 #else
+#define SZ_USE_ARM_SVE 0
+#endif
+#endif
+
+// Undef the hardware features if the build target never supports them, mainly used when building MacOS universal2
+// because then both x86 & arm feature flags can be set
+#ifndef SZ_TARGET_X86
+#if !(defined(__i386__) || defined(__amd64__) || defined(_M_IX86) || defined(_M_AMD64))
+#undef SZ_USE_X86_AVX2
+#define SZ_USE_X86_AVX2 0
+#undef SZ_USE_X86_AVX512
+#define SZ_USE_X86_AVX512 0
+#endif
+#endif
+
+#ifndef SZ_TARGET_ARM
+#if !(defined(__arm__) || defined(__aarch64__) || defined(_M_ARM) || defined(_M_ARM64))
+#undef SZ_USE_ARM_NEON
+#define SZ_USE_ARM_NEON 0
+#undef SZ_USE_ARM_SVE
 #define SZ_USE_ARM_SVE 0
 #endif
 #endif
@@ -1383,6 +1407,14 @@ SZ_PUBLIC void _sz_assert_failure(char const *condition, char const *file, int l
 #if defined(_MSC_VER) && !defined(__clang__) // On Clang-CL
 #include <intrin.h>
 
+#if defined(_M_ARM) || defined(_M_ARM64) || defined(_M_ARM64EC)
+SZ_INTERNAL int sz_u64_ctz(sz_u64_t x) { return (int)_CountTrailingZeros64(x); }
+SZ_INTERNAL int sz_u64_clz(sz_u64_t x) { return (int)_CountLeadingZeros64(x); }
+SZ_INTERNAL int sz_u64_popcount(sz_u64_t x) { return (int)_CountOneBits64(x); }
+SZ_INTERNAL int sz_u32_popcount(sz_u32_t x) { return (int)_CountOneBits(x); }
+SZ_INTERNAL int sz_u32_ctz(sz_u32_t x) { return (int)_CountTrailingZeros(x); }
+SZ_INTERNAL int sz_u32_clz(sz_u32_t x) { return (int)_CountLeadingZeros(x); }
+#else
 // Sadly, when building Win32 images, we can't use the `_tzcnt_u64`, `_lzcnt_u64`,
 // `_BitScanForward64`, or `_BitScanReverse64` intrinsics. For now it's a simple `for`-loop.
 // TODO: In the future we can switch to a more efficient De Bruijn's algorithm.
@@ -1390,8 +1422,8 @@ SZ_PUBLIC void _sz_assert_failure(char const *condition, char const *file, int l
 // https://www.chessprogramming.org/De_Bruijn_Sequence
 // https://gist.github.com/resilar/e722d4600dbec9752771ab4c9d47044f
 //
-// Use the serial version on 32-bit x86 and on Arm.
-#if (defined(_WIN32) && !defined(_WIN64)) || defined(_M_ARM) || defined(_M_ARM64)
+// Use the serial version on 32-bit x86.
+#if (defined(_WIN32) && !defined(_WIN64))
 SZ_INTERNAL int sz_u64_ctz(sz_u64_t x) {
     sz_assert(x != 0);
     int n = 0;
@@ -1409,31 +1441,18 @@ SZ_INTERNAL int sz_u64_popcount(sz_u64_t x) {
     x = (x & 0x3333333333333333ull) + ((x >> 2) & 0x3333333333333333ull);
     return (((x + (x >> 4)) & 0x0F0F0F0F0F0F0F0Full) * 0x0101010101010101ull) >> 56;
 }
-SZ_INTERNAL int sz_u32_ctz(sz_u32_t x) {
-    sz_assert(x != 0);
-    int n = 0;
-    while ((x & 1) == 0) { n++, x >>= 1; }
-    return n;
-}
-SZ_INTERNAL int sz_u32_clz(sz_u32_t x) {
-    sz_assert(x != 0);
-    int n = 0;
-    while ((x & 0x80000000u) == 0) { n++, x <<= 1; }
-    return n;
-}
-SZ_INTERNAL int sz_u32_popcount(sz_u32_t x) {
-    x = x - ((x >> 1) & 0x55555555);
-    x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
-    return (((x + (x >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
-}
 #else
 SZ_INTERNAL int sz_u64_ctz(sz_u64_t x) { return (int)_tzcnt_u64(x); }
 SZ_INTERNAL int sz_u64_clz(sz_u64_t x) { return (int)_lzcnt_u64(x); }
 SZ_INTERNAL int sz_u64_popcount(sz_u64_t x) { return (int)__popcnt64(x); }
+#endif
+
 SZ_INTERNAL int sz_u32_ctz(sz_u32_t x) { return (int)_tzcnt_u32(x); }
 SZ_INTERNAL int sz_u32_clz(sz_u32_t x) { return (int)_lzcnt_u32(x); }
 SZ_INTERNAL int sz_u32_popcount(sz_u32_t x) { return (int)__popcnt(x); }
+
 #endif
+
 // Force the byteswap functions to be intrinsics, because when /Oi- is given, these will turn into CRT function calls,
 // which breaks when `SZ_AVOID_LIBC` is given
 #pragma intrinsic(_byteswap_uint64)
@@ -1451,6 +1470,16 @@ SZ_INTERNAL sz_u64_t sz_u64_bytes_reverse(sz_u64_t val) { return __builtin_bswap
 SZ_INTERNAL sz_u32_t sz_u32_bytes_reverse(sz_u32_t val) { return __builtin_bswap32(val); }
 #endif
 
+#if SZ_DETECT_64_BIT
+SZ_INTERNAL int sz_size_popcount(sz_size_t x) { return sz_u64_popcount(x); }
+SZ_INTERNAL int sz_size_ctz(sz_size_t x) { return sz_u64_ctz(x); }
+SZ_INTERNAL int sz_size_clz(sz_size_t x) { return sz_u64_clz(x); }
+#else
+SZ_INTERNAL int sz_size_popcount(sz_size_t x) { return sz_u32_popcount(x); }
+SZ_INTERNAL int sz_size_ctz(sz_size_t x) { return sz_u32_ctz(x); }
+SZ_INTERNAL int sz_size_clz(sz_size_t x) { return sz_u32_clz(x); }
+#endif
+
 SZ_INTERNAL sz_u64_t sz_u64_rotl(sz_u64_t x, sz_u64_t r) { return (x << r) | (x >> (64 - r)); }
 
 /**
@@ -1458,9 +1487,12 @@ SZ_INTERNAL sz_u64_t sz_u64_rotl(sz_u64_t x, sz_u64_t r) { return (x << r) | (x 
  *
  *  Similar to `_mm_blend_epi16` intrinsic on x86.
  *  Described in the "Bit Twiddling Hacks" by Sean Eron Anderson.
- *  https://graphics.stanford.edu/~seander/bithacks.html#ConditionalSetOrClearBitsWithoutBranching
+ *  https://graphics.stanford.edu/~seander/bithacks.html#MaskedMerge
  */
 SZ_INTERNAL sz_u64_t sz_u64_blend(sz_u64_t a, sz_u64_t b, sz_u64_t mask) { return a ^ ((a ^ b) & mask); }
+
+/** @copydoc sz_u64_blend */
+SZ_INTERNAL sz_size_t sz_size_blend(sz_size_t a, sz_size_t b, sz_size_t mask) { return a ^ ((a ^ b) & mask); }
 
 /*
  *  Efficiently computing the minimum and maximum of two or three values can be tricky.
@@ -1894,17 +1926,17 @@ SZ_PUBLIC sz_ordering_t sz_order_serial(sz_cptr_t a, sz_size_t a_length, sz_cptr
 }
 
 /**
- *  @brief  Byte-level equality comparison between two 64-bit integers.
- *  @return 64-bit integer, where every top bit in each byte signifies a match.
+ *  @brief  Byte-level equality comparison between two 32/64 bit integers.
+ *  @return 32/64 bit integer, where every top bit in each byte signifies a match.
  */
-SZ_INTERNAL sz_u64_vec_t _sz_u64_each_byte_equal(sz_u64_vec_t a, sz_u64_vec_t b) {
-    sz_u64_vec_t vec;
-    vec.u64 = ~(a.u64 ^ b.u64);
+SZ_INTERNAL sz_size_t _sz_size_each_byte_equal(sz_size_t a, sz_size_t b) {
+    sz_size_t v = ~(a ^ b);
     // The match is valid, if every bit within each byte is set.
     // For that take the bottom 7 bits of each byte, add one to them,
     // and if this sets the top bit to one, then all the 7 bits are ones as well.
-    vec.u64 = ((vec.u64 & 0x7F7F7F7F7F7F7F7Full) + 0x0101010101010101ull) & ((vec.u64 & 0x8080808080808080ull));
-    return vec;
+    v = ((v & (sz_size_t)0x7F7F7F7F7F7F7F7Full) + (sz_size_t)0x0101010101010101ull) &
+        (v & (sz_size_t)0x8080808080808080ull);
+    return v;
 }
 
 /**
@@ -1913,25 +1945,24 @@ SZ_INTERNAL sz_u64_vec_t _sz_u64_each_byte_equal(sz_u64_vec_t a, sz_u64_vec_t b)
  *          Identical to `memchr(haystack, needle[0], haystack_length)`.
  */
 SZ_PUBLIC sz_cptr_t sz_find_byte_serial(sz_cptr_t h, sz_size_t h_length, sz_cptr_t n) {
-
     if (!h_length) return SZ_NULL_CHAR;
     sz_cptr_t const h_end = h + h_length;
 
 #if !SZ_DETECT_BIG_ENDIAN    // Use SWAR only on little-endian platforms for brevety.
-#if !SZ_USE_MISALIGNED_LOADS // Process the misaligned head, to void UB on unaligned 64-bit loads.
-    for (; ((sz_size_t)h & 7ull) && h < h_end; ++h)
+#if !SZ_USE_MISALIGNED_LOADS // Process the misaligned head, to void UB on unaligned 32/64 bit loads.
+    for (; ((sz_size_t)h & (SZ_SWAR_BYTES - 1)) && h < h_end; ++h)
         if (*h == *n) return h;
 #endif
 
-    // Broadcast the n into every byte of a 64-bit integer to use SWAR
-    // techniques and process eight characters at a time.
-    sz_u64_vec_t h_vec, n_vec, match_vec;
-    match_vec.u64 = 0;
-    n_vec.u64 = (sz_u64_t)n[0] * 0x0101010101010101ull;
-    for (; h + 8 <= h_end; h += 8) {
-        h_vec.u64 = *(sz_u64_t const *)h;
-        match_vec = _sz_u64_each_byte_equal(h_vec, n_vec);
-        if (match_vec.u64) return h + sz_u64_ctz(match_vec.u64) / 8;
+    // Broadcast the n into every byte of a 32/64 bit integer to use SWAR
+    // techniques and process 4/8 characters at a time.
+    sz_size_t h_vec, n_vec, match_vec;
+    match_vec = 0;
+    n_vec = (sz_size_t)n[0] * (sz_size_t)0x0101010101010101ull;
+    for (; h + SZ_SWAR_BYTES <= h_end; h += SZ_SWAR_BYTES) {
+        h_vec = *(sz_size_t const *)h;
+        match_vec = _sz_size_each_byte_equal(h_vec, n_vec);
+        if (match_vec) return h + sz_size_ctz(match_vec) / 8;
     }
 #endif
 
@@ -1947,7 +1978,6 @@ SZ_PUBLIC sz_cptr_t sz_find_byte_serial(sz_cptr_t h, sz_size_t h_length, sz_cptr
  *          Identical to `memrchr(haystack, needle[0], haystack_length)`.
  */
 sz_cptr_t sz_rfind_byte_serial(sz_cptr_t h, sz_size_t h_length, sz_cptr_t n) {
-
     if (!h_length) return SZ_NULL_CHAR;
     sz_cptr_t const h_start = h;
 
@@ -1955,19 +1985,19 @@ sz_cptr_t sz_rfind_byte_serial(sz_cptr_t h, sz_size_t h_length, sz_cptr_t n) {
     h = h + h_length - 1;
 
 #if !SZ_DETECT_BIG_ENDIAN    // Use SWAR only on little-endian platforms for brevety.
-#if !SZ_USE_MISALIGNED_LOADS // Process the misaligned head, to void UB on unaligned 64-bit loads.
-    for (; ((sz_size_t)(h + 1) & 7ull) && h >= h_start; --h)
+#if !SZ_USE_MISALIGNED_LOADS // Process the misaligned head, to void UB on unaligned 32/64 bit loads.
+    for (; ((sz_size_t)(h + 1) & (SZ_SWAR_BYTES - 1)) && h >= h_start; --h)
         if (*h == *n) return h;
 #endif
 
-    // Broadcast the n into every byte of a 64-bit integer to use SWAR
-    // techniques and process eight characters at a time.
-    sz_u64_vec_t h_vec, n_vec, match_vec;
-    n_vec.u64 = (sz_u64_t)n[0] * 0x0101010101010101ull;
-    for (; h >= h_start + 7; h -= 8) {
-        h_vec.u64 = *(sz_u64_t const *)(h - 7);
-        match_vec = _sz_u64_each_byte_equal(h_vec, n_vec);
-        if (match_vec.u64) return h - sz_u64_clz(match_vec.u64) / 8;
+    // Broadcast the n into every byte of a 32/64 bit integer to use SWAR
+    // techniques and process 4/8 characters at a time.
+    sz_size_t h_vec, n_vec, match_vec;
+    n_vec = (sz_size_t)n[0] * (sz_size_t)0x0101010101010101ull;
+    for (; h >= h_start + (SZ_SWAR_BYTES - 1); h -= SZ_SWAR_BYTES) {
+        h_vec = *(sz_size_t const *)(h - (SZ_SWAR_BYTES - 1));
+        match_vec = _sz_size_each_byte_equal(h_vec, n_vec);
+        if (match_vec) return h - sz_size_clz(match_vec) / 8;
     }
 #endif
 
@@ -1991,21 +2021,36 @@ SZ_INTERNAL sz_u64_vec_t _sz_u64_each_2byte_equal(sz_u64_vec_t a, sz_u64_vec_t b
 }
 
 /**
+ *  @brief  2Byte-level equality comparison between two 32-bit integers.
+ *  @return 32-bit integer, where every top bit in each 2byte signifies a match.
+ */
+SZ_INTERNAL sz_u32_vec_t _sz_u32_each_2byte_equal(sz_u32_vec_t a, sz_u32_vec_t b) {
+    sz_u32_vec_t vec;
+    vec.u32 = ~(a.u32 ^ b.u32);
+    // The match is valid, if every bit within each 2byte is set.
+    // For that take the bottom 15 bits of each 2byte, add one to them,
+    // and if this sets the top bit to one, then all the 15 bits are ones as well.
+    vec.u32 = ((vec.u32 & (sz_u32_t)0x7FFF7FFF7FFF7FFFull) + (sz_u32_t)0x0001000100010001ull) &
+              ((vec.u32 & (sz_u32_t)0x8000800080008000ull));
+    return vec;
+}
+
+/**
  *  @brief  Find the first occurrence of a @b two-character needle in an arbitrary length haystack.
- *          This implementation uses hardware-agnostic SWAR technique, to process 8 possible offsets at a time.
+ *          This implementation uses hardware-agnostic SWAR technique, to process 4/8 possible offsets at a time.
  */
 SZ_INTERNAL sz_cptr_t _sz_find_2byte_serial(sz_cptr_t h, sz_size_t h_length, sz_cptr_t n) {
-
     // This is an internal method, and the haystack is guaranteed to be at least 2 bytes long.
     sz_assert(h_length >= 2 && "The haystack is too short.");
     sz_cptr_t const h_end = h + h_length;
 
 #if !SZ_USE_MISALIGNED_LOADS
-    // Process the misaligned head, to void UB on unaligned 64-bit loads.
-    for (; ((sz_size_t)h & 7ull) && h + 2 <= h_end; ++h)
+    // Process the misaligned head, to void UB on unaligned 32/64 bit loads.
+    for (; ((sz_size_t)h & (SZ_SWAR_BYTES - 1)) && h + 2 <= h_end; ++h)
         if ((h[0] == n[0]) + (h[1] == n[1]) == 2) return h;
 #endif
 
+#if SZ_DETECT_64_BIT
     sz_u64_vec_t h_even_vec, h_odd_vec, n_vec, matches_even_vec, matches_odd_vec;
     n_vec.u64 = 0;
     n_vec.u8s[0] = n[0], n_vec.u8s[1] = n[1];
@@ -2024,6 +2069,26 @@ SZ_INTERNAL sz_cptr_t _sz_find_2byte_serial(sz_cptr_t h, sz_size_t h_length, sz_
             return h + sz_u64_ctz(match_indicators) / 8;
         }
     }
+#else
+    sz_u32_vec_t h_even_vec, h_odd_vec, n_vec, matches_even_vec, matches_odd_vec;
+    n_vec.u32 = 0;
+    n_vec.u8s[0] = n[0], n_vec.u8s[1] = n[1];
+    n_vec.u32 *= (sz_u32_t)0x0001000100010001ull; // broadcast
+
+    // This code simulates hyper-scalar execution, analyzing 4 offsets at a time.
+    for (; h + 5 <= h_end; h += 4) {
+        h_even_vec.u32 = *(sz_u32_t *)h;
+        h_odd_vec.u32 = (h_even_vec.u32 >> 8) | ((sz_u32_t)h[4] << 24);
+        matches_even_vec = _sz_u32_each_2byte_equal(h_even_vec, n_vec);
+        matches_odd_vec = _sz_u32_each_2byte_equal(h_odd_vec, n_vec);
+
+        matches_even_vec.u32 >>= 8;
+        if (matches_even_vec.u32 + matches_odd_vec.u32) {
+            sz_u32_t match_indicators = matches_even_vec.u32 | matches_odd_vec.u32;
+            return h + sz_u32_ctz(match_indicators) / 8;
+        }
+    }
+#endif
 
     for (; h + 2 <= h_end; ++h)
         if ((h[0] == n[0]) + (h[1] == n[1]) == 2) return h;
@@ -2049,7 +2114,7 @@ SZ_INTERNAL sz_u64_vec_t _sz_u64_each_4byte_equal(sz_u64_vec_t a, sz_u64_vec_t b
  *          This implementation uses hardware-agnostic SWAR technique, to process 8 possible offsets at a time.
  */
 SZ_INTERNAL sz_cptr_t _sz_find_4byte_serial(sz_cptr_t h, sz_size_t h_length, sz_cptr_t n) {
-
+    // TODO: implement actual SWAR-32 version (for 32-bit)
     // This is an internal method, and the haystack is guaranteed to be at least 4 bytes long.
     sz_assert(h_length >= 4 && "The haystack is too short.");
     sz_cptr_t const h_end = h + h_length;
@@ -2063,7 +2128,11 @@ SZ_INTERNAL sz_cptr_t _sz_find_4byte_serial(sz_cptr_t h, sz_size_t h_length, sz_
     sz_u64_vec_t h0_vec, h1_vec, h2_vec, h3_vec, n_vec, matches0_vec, matches1_vec, matches2_vec, matches3_vec;
     n_vec.u64 = 0;
     n_vec.u8s[0] = n[0], n_vec.u8s[1] = n[1], n_vec.u8s[2] = n[2], n_vec.u8s[3] = n[3];
+#if SZ_DETECT_64_BIT
     n_vec.u64 *= 0x0000000100000001ull; // broadcast
+#else
+    n_vec.u32s[1] = n_vec.u32s[0]; // broadcast
+#endif
 
     // This code simulates hyper-scalar execution, analyzing 8 offsets at a time using four 64-bit words.
     // We load the subsequent four-byte word as well, taking its first bytes. Think of it as a glorified prefetch :)
@@ -2799,12 +2868,17 @@ SZ_PUBLIC sz_size_t sz_hamming_distance_serial( //
     sz_size_t distance = max_length - min_length;
 #if SZ_USE_MISALIGNED_LOADS && !SZ_DETECT_BIG_ENDIAN
     if (min_length >= SZ_SWAR_THRESHOLD) {
-        sz_u64_vec_t a_vec, b_vec, match_vec;
-        for (; a + 8 <= a_end && distance < bound; a += 8, b += 8) {
-            a_vec.u64 = sz_u64_load(a).u64;
-            b_vec.u64 = sz_u64_load(b).u64;
-            match_vec = _sz_u64_each_byte_equal(a_vec, b_vec);
-            distance += sz_u64_popcount((~match_vec.u64) & 0x8080808080808080ull);
+        sz_size_t a_vec, b_vec, match_vec;
+        for (; a + SZ_SWAR_BYTES <= a_end && distance < bound; a += SZ_SWAR_BYTES, b += SZ_SWAR_BYTES) {
+#if SZ_DETECT_64_BIT
+            a_vec = sz_u64_load(a).u64;
+            b_vec = sz_u64_load(b).u64;
+#else
+            a_vec = sz_u32_load(a).u32;
+            b_vec = sz_u32_load(b).u32;
+#endif
+            match_vec = _sz_size_each_byte_equal(a_vec, b_vec);
+            distance += sz_size_popcount((~match_vec) & (sz_size_t)0x8080808080808080ull);
         }
     }
 #endif
@@ -3244,7 +3318,7 @@ SZ_PUBLIC void sz_string_unpack(sz_string_t const *string, sz_ptr_t *start, sz_s
     // If the string is small, use branch-less approach to mask-out the top 7 bytes of the length.
     *length = string->external.length & (0x00000000000000FFull | is_big_mask);
     // In case the string is small, the `is_small - 1ull` will become 0xFFFFFFFFFFFFFFFFull.
-    *space = sz_u64_blend(SZ_STRING_INTERNAL_SPACE, string->external.space, is_big_mask);
+    *space = sz_size_blend(SZ_STRING_INTERNAL_SPACE, string->external.space, is_big_mask);
     *is_external = (sz_bool_t)!is_small;
 }
 
@@ -3454,30 +3528,52 @@ SZ_PUBLIC void sz_string_free(sz_string_t *string, sz_memory_allocator_t *alloca
     sz_string_init(string);
 }
 
-// When overriding libc, disable optimisations for this function beacuse MSVC will optimize the loops into a memset.
-// Which then causes a stack overflow due to infinite recursion (memset -> sz_fill_serial -> memset).
-#if defined(_MSC_VER) && defined(SZ_OVERRIDE_LIBC) && SZ_OVERRIDE_LIBC
-#pragma optimize("", off)
-#endif
 SZ_PUBLIC void sz_fill_serial(sz_ptr_t target, sz_size_t length, sz_u8_t value) {
     sz_ptr_t end = target + length;
     // Dealing with short strings, a single sequential pass would be faster.
     // If the size is larger than 2 words, then at least 1 of them will be aligned.
     // But just one aligned word may not be worth SWAR.
-    if (length < SZ_SWAR_THRESHOLD)
-        while (target != end) *(target++) = value;
+    if (length < SZ_SWAR_THRESHOLD) {
+        // Don't use a single byte loop for MSVC otherwise it'll be converted to a memset call, which breaks when were
+        // overriding libc
+#if defined(_MSC_VER)
+        while (length >= 2) {
+            *(target++) = value;
+            *(target++) = value;
+            length -= 2;
+        }
 
-    // In case of long strings, skip unaligned bytes, and then fill the rest in 64-bit chunks.
-    else {
-        sz_u64_t value64 = (sz_u64_t)value * 0x0101010101010101ull;
-        while ((sz_size_t)target & 7ull) *(target++) = value;
-        while (target + 8 <= end) *(sz_u64_t *)target = value64, target += 8;
+        if (length) *target = value;
+#else
         while (target != end) *(target++) = value;
+#endif
+    }
+    // In case of long strings, skip unaligned bytes, and then fill the rest in 32/64 bit chunks.
+    else {
+        const sz_size_t valueSWAR = value * (sz_size_t)0x0101010101010101ull;
+        while ((sz_size_t)target & (SZ_SWAR_BYTES - 1)) *(target++) = value;
+        while (target + SZ_SWAR_BYTES <= end) *(sz_size_t *)target = valueSWAR, target += SZ_SWAR_BYTES;
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
+#pragma warning(push)
+#pragma warning(disable : 26819) // Unannotated fallthrough between switch labels
+        switch ((end - target) % SZ_SWAR_BYTES) {
+#if SZ_DETECT_64_BIT
+        case 7: *(target + 6) = value;
+        case 6: *(target + 5) = value;
+        case 5: *(target + 4) = value;
+        case 4: *(target + 3) = value;
+#endif
+        case 3: *(target + 2) = value;
+        case 2: *(target + 1) = value;
+        case 1: *(target + 0) = value;
+        case 0: break;
+        }
+#pragma GCC diagnostic pop
+#pragma warning(pop)
     }
 }
-#if defined(_MSC_VER) && defined(SZ_OVERRIDE_LIBC) && SZ_OVERRIDE_LIBC
-#pragma optimize("", on)
-#endif
 
 SZ_PUBLIC void sz_copy_serial(sz_ptr_t target, sz_cptr_t source, sz_size_t length) {
 #if SZ_USE_MISALIGNED_LOADS
@@ -3522,10 +3618,10 @@ SZ_PUBLIC void sz_move_serial(sz_ptr_t target, sz_cptr_t source, sz_size_t lengt
 SZ_PUBLIC sz_size_t sz_partition(sz_sequence_t *sequence, sz_sequence_predicate_t predicate) {
 
     sz_size_t matches = 0;
-    while (matches != sequence->count && predicate(sequence, sequence->order[matches])) ++matches;
+    while (matches != sequence->count && predicate(sequence, (sz_size_t)sequence->order[matches])) ++matches;
 
     for (sz_size_t i = matches + 1; i < sequence->count; ++i)
-        if (predicate(sequence, sequence->order[i]))
+        if (predicate(sequence, (sz_size_t)sequence->order[i]))
             sz_u64_swap(sequence->order + i, sequence->order + matches), ++matches;
 
     return matches;
@@ -3536,15 +3632,15 @@ SZ_PUBLIC void sz_merge(sz_sequence_t *sequence, sz_size_t partition, sz_sequenc
     sz_size_t start_b = partition + 1;
 
     // If the direct merge is already sorted
-    if (!less(sequence, sequence->order[start_b], sequence->order[partition])) return;
+    if (!less(sequence, (sz_size_t)sequence->order[start_b], (sz_size_t)sequence->order[partition])) return;
 
     sz_size_t start_a = 0;
     while (start_a <= partition && start_b <= sequence->count) {
 
         // If element 1 is in right place
-        if (!less(sequence, sequence->order[start_b], sequence->order[start_a])) { start_a++; }
+        if (!less(sequence, (sz_size_t)sequence->order[start_b], (sz_size_t)sequence->order[start_a])) { start_a++; }
         else {
-            sz_size_t value = sequence->order[start_b];
+            sz_size_t value = (sz_size_t)sequence->order[start_b];
             sz_size_t index = start_b;
 
             // Shift all the elements between element 1
@@ -3566,7 +3662,7 @@ SZ_PUBLIC void sz_sort_insertion(sz_sequence_t *sequence, sz_sequence_comparator
     for (sz_size_t i = 1; i < keys_count; i++) {
         sz_u64_t i_key = keys[i];
         sz_size_t j = i;
-        for (; j > 0 && less(sequence, i_key, keys[j - 1]); --j) keys[j] = keys[j - 1];
+        for (; j > 0 && less(sequence, (sz_size_t)i_key, (sz_size_t)keys[j - 1]); --j) keys[j] = keys[j - 1];
         keys[j] = i_key;
     }
 }
@@ -3576,8 +3672,8 @@ SZ_INTERNAL void _sz_sift_down(sz_sequence_t *sequence, sz_sequence_comparator_t
     sz_size_t root = start;
     while (2 * root + 1 <= end) {
         sz_size_t child = 2 * root + 1;
-        if (child + 1 <= end && less(sequence, order[child], order[child + 1])) { child++; }
-        if (!less(sequence, order[root], order[child])) { return; }
+        if (child + 1 <= end && less(sequence, (sz_size_t)order[child], (sz_size_t)order[child + 1])) { child++; }
+        if (!less(sequence, (sz_size_t)order[root], (sz_size_t)order[child])) { return; }
         sz_u64_swap(order + root, order + child);
         root = child;
     }
@@ -3612,16 +3708,16 @@ SZ_PUBLIC void sz_sort_introsort_recursion(sz_sequence_t *sequence, sz_sequence_
     case 0:
     case 1: return;
     case 2:
-        if (less(sequence, sequence->order[first + 1], sequence->order[first]))
+        if (less(sequence, (sz_size_t)sequence->order[first + 1], (sz_size_t)sequence->order[first]))
             sz_u64_swap(&sequence->order[first], &sequence->order[first + 1]);
         return;
     case 3: {
         sz_u64_t a = sequence->order[first];
         sz_u64_t b = sequence->order[first + 1];
         sz_u64_t c = sequence->order[first + 2];
-        if (less(sequence, b, a)) sz_u64_swap(&a, &b);
-        if (less(sequence, c, b)) sz_u64_swap(&c, &b);
-        if (less(sequence, b, a)) sz_u64_swap(&a, &b);
+        if (less(sequence, (sz_size_t)b, (sz_size_t)a)) sz_u64_swap(&a, &b);
+        if (less(sequence, (sz_size_t)c, (sz_size_t)b)) sz_u64_swap(&c, &b);
+        if (less(sequence, (sz_size_t)b, (sz_size_t)a)) sz_u64_swap(&a, &b);
         sequence->order[first] = a;
         sequence->order[first + 1] = b;
         sequence->order[first + 2] = c;
@@ -3647,11 +3743,11 @@ SZ_PUBLIC void sz_sort_introsort_recursion(sz_sequence_t *sequence, sz_sequence_
 
     // Median-of-three logic to choose pivot
     sz_size_t median = first + length / 2;
-    if (less(sequence, sequence->order[median], sequence->order[first]))
+    if (less(sequence, (sz_size_t)sequence->order[median], (sz_size_t)sequence->order[first]))
         sz_u64_swap(&sequence->order[first], &sequence->order[median]);
-    if (less(sequence, sequence->order[last - 1], sequence->order[first]))
+    if (less(sequence, (sz_size_t)sequence->order[last - 1], (sz_size_t)sequence->order[first]))
         sz_u64_swap(&sequence->order[first], &sequence->order[last - 1]);
-    if (less(sequence, sequence->order[median], sequence->order[last - 1]))
+    if (less(sequence, (sz_size_t)sequence->order[median], (sz_size_t)sequence->order[last - 1]))
         sz_u64_swap(&sequence->order[median], &sequence->order[last - 1]);
 
     // Partition using the median-of-three as the pivot
@@ -3659,8 +3755,8 @@ SZ_PUBLIC void sz_sort_introsort_recursion(sz_sequence_t *sequence, sz_sequence_
     sz_size_t left = first;
     sz_size_t right = last - 1;
     while (1) {
-        while (less(sequence, sequence->order[left], pivot)) left++;
-        while (less(sequence, pivot, sequence->order[right])) right--;
+        while (less(sequence, (sz_size_t)sequence->order[left], (sz_size_t)pivot)) left++;
+        while (less(sequence, (sz_size_t)pivot, (sz_size_t)sequence->order[right])) right--;
         if (left >= right) break;
         sz_u64_swap(&sequence->order[left], &sequence->order[right]);
         left++;
@@ -3777,8 +3873,8 @@ SZ_PUBLIC void sz_sort_partial(sz_sequence_t *sequence, sz_size_t partial_order_
 
     // Export up to 4 bytes into the `sequence` bits themselves
     for (sz_size_t i = 0; i != sequence->count; ++i) {
-        sz_cptr_t begin = sequence->get_start(sequence, sequence->order[i]);
-        sz_size_t length = sequence->get_length(sequence, sequence->order[i]);
+        sz_cptr_t begin = sequence->get_start(sequence, (sz_size_t)sequence->order[i]);
+        sz_size_t length = sequence->get_length(sequence, (sz_size_t)sequence->order[i]);
         length = length > 4u ? 4u : length;
         sz_ptr_t prefix = (sz_ptr_t)&sequence->order[i];
         for (sz_size_t j = 0; j != length; ++j) prefix[7 - j] = begin[j];

@@ -64,6 +64,15 @@ template class sz::basic_charset<char>;
  */
 static void test_arithmetical_utilities() {
 
+    assert(sz_u32_clz(0x0000000000000001u) == 31);
+    assert(sz_u32_clz(0x00000002u) == 30);
+    assert(sz_u32_clz(0x00000003u) == 30);
+    assert(sz_u32_clz(0x00000004u) == 29);
+    assert(sz_u32_clz(0x00000007u) == 29);
+    assert(sz_u32_clz(0x80000001u) == 0);
+    assert(sz_u32_clz(0xffffffffu) == 0);
+    assert(sz_u32_clz(0x40000000u) == 1);
+
     assert(sz_u64_clz(0x0000000000000001ull) == 63);
     assert(sz_u64_clz(0x0000000000000002ull) == 62);
     assert(sz_u64_clz(0x0000000000000003ull) == 62);
@@ -1484,7 +1493,9 @@ static void test_sequence_algorithms() {
         for (std::size_t experiment_idx = 0; experiment_idx != 10; ++experiment_idx) {
             std::shuffle(dataset.begin(), dataset.end(), global_random_generator());
             auto order = sz::sorted_order(dataset);
-            for (std::size_t i = 1; i != dataset_size; ++i) { assert(dataset[order[i - 1]] <= dataset[order[i]]); }
+            for (std::size_t i = 1; i != dataset_size; ++i) {
+                assert(dataset[(sz_size_t)order[i - 1]] <= dataset[(sz_size_t)order[i]]);
+            }
         }
     }
 }

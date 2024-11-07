@@ -78,7 +78,7 @@ jobs:
     needs: versioning
     strategy:
       matrix:
-        os: [ubuntu-24.04, macos-13, windows-2022]
+        os: [ubuntu-24.04, macos-14, windows-2022]
         python-version: ["36", "37", "38", "39", "310", "311", "312"]
     steps:
       - uses: actions/checkout@v4
@@ -286,47 +286,44 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [x64, x86]
+        include:
+          - arch: x64
+            target: x64
+          - arch: x86
+            target: x86
+          - arch: amd64_arm64
+            target: arm64
     steps:
       - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
         with:
-          persist-credentials: false
-          ref: "main"
-      - run: git submodule update --init --recursive
-
-      - name: Setup CMake
-        uses: jwlawson/actions-setup-cmake@v1.13
-
-      - name: Setup MinGW
-        uses: egor-tensin/setup-mingw@v2
-        with:
-          platform: ${{ matrix.arch }}
-          version: 12.2.0
+          arch: ${{ matrix.arch }}
 
       - name: Get version
         id: set_version
-        shell: bash
+        shell: cmd
         run: |
-          version=$(cat VERSION)
-          echo "version=$version" >> $GITHUB_OUTPUT
+          set /p version=<VERSION
+          echo version=%version% >> %GITHUB_OUTPUT%
 
       - name: Build library
+        shell: cmd
         run: |
           cmake -DCMAKE_BUILD_TYPE=Release -B build_release
           cmake --build build_release --config Release
-          tar -cvf "stringzillite_windows_${{ matrix.arch }}_${{ steps.set_version.outputs.version }}.tar" "build_release/stringzillite.dll" "./include/stringzilla/stringzilla.h"
+          tar -cvf "stringzillite_windows_${{ matrix.target }}_${{ steps.set_version.outputs.version }}.tar" "build_release\stringzillite.dll" "build_release\stringzillite.lib" ".\include\stringzilla\stringzilla.h"
 
       - name: Upload archive
         uses: xresloader/upload-to-github-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          file: "stringzillite_windows_${{ matrix.arch }}_${{ steps.set_version.outputs.version }}.tar"
+          file: "stringzillite_windows_${{ matrix.target }}_${{ steps.set_version.outputs.version }}.tar"
           update_latest_release: true
 
   create_macos_library:
     name: Create Library for MacOS ${{ matrix.arch }}
-    runs-on: macos-13
+    runs-on: macos-14
     needs: versioning
     strategy:
       fail-fast: false

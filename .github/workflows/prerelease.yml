@@ -85,6 +85,8 @@ jobs:
           }
       - name: Test C++
         run: build_artifacts/stringzilla_test_cpp20
+      - name: Check stringzillite is built correctly
+        run: test -z "$(ldd build_artifacts/libstringzillite.so | grep '.so')"
       - name: Test on Real World Data
         run: |
           build_artifacts/stringzilla_bench_search ${DATASET_PATH}     # for substring search
@@ -169,6 +171,8 @@ jobs:
           }
       - name: Test C++
         run: build_artifacts/stringzilla_test_cpp20
+      - name: Check stringzillite is built correctly
+        run: test -z "$(ldd build_artifacts/libstringzillite.so | grep '.so')"
       - name: Test on Real World Data
         run: |
           build_artifacts/stringzilla_bench_search ${DATASET_PATH}     # for substring search
@@ -225,7 +229,7 @@ jobs:
         run: swift test
 
   test_ubuntu_cross_compilation:
-    name: Cross Compilation
+    name: Clang Cross Compilation
     runs-on: ubuntu-22.04
     env:
       CC: clang-16
@@ -278,10 +282,13 @@ jobs:
           test -e build_artifacts/libstringzillite.so
           test -e build_artifacts/libstringzilla_shared.so
           test -e build_artifacts/stringzilla_test_cpp20
+      
+      - name: Check stringzillite is built correctly
+        run: test -z "$(ldd build_artifacts/libstringzillite.so | grep '.so')"
 
   test_macos:
     name: MacOS
-    runs-on: macos-13
+    runs-on: macos-14
 
     steps:
       - uses: actions/checkout@v4
@@ -301,6 +308,8 @@ jobs:
           cmake --build build_artifacts --config RelWithDebInfo
       - name: Test C++
         run: build_artifacts/stringzilla_test_cpp17
+      - name: Check stringzillite is built correctly
+        run: test -z "$(ldd build_artifacts/libstringzillite.so | grep '.so')"
       - name: Test on Real World Data
         run: |
           build_artifacts/stringzilla_bench_search ${DATASET_PATH}     # for substring search
@@ -374,6 +383,9 @@ jobs:
           )
       - name: Test C++
         run: .\build_artifacts\stringzilla_test_cpp20.exe
+      - name: Check stringzillite is built correctly
+        shell: cmd
+        run: dumpbin /nologo /dependents .\build_artifacts\stringzillite.dll | findstr /r "^[^a-z].*\.dll" && exit /b 1 || exit /b 0
       - name: Test on Real World Data
         run: |
           .\build_artifacts\stringzilla_bench_search.exe ${DATASET_PATH}     # for substring search
@@ -400,6 +412,51 @@ jobs:
       - name: Test Python
         run: pytest scripts/test.py -s -x
 
+  test_windows_cross_compilation:
+    name: Windows Cross Compilation ${{ matrix.target }}
+    runs-on: windows-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x64
+          - arch: x86
+            target: x86
+          - arch: amd64_arm64
+            target: arm64
+            
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+      
+      - name: Build C/C++
+        shell: cmd
+        run: |
+          cmake -GNinja -B build_artifacts ^
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=1 ^
+            -DSTRINGZILLA_BUILD_SHARED=1 ^
+            -DSTRINGZILLA_BUILD_BENCHMARK=1 ^
+            -DSTRINGZILLA_BUILD_TEST=1
+
+          cmake --build build_artifacts --config RelWithDebInfo
+        
+        # We can't run the produced builds, but we can make sure they exist
+      - name: Test artifacts presense
+        shell: cmd
+        run: |
+          type build_artifacts\stringzillite.dll >NUL
+          type build_artifacts\stringzilla_shared.dll >NUL
+          type build_artifacts\stringzilla_test_cpp20.exe >NUL
+      
+      - name: Check stringzillite is built correctly
+        shell: cmd
+        run: dumpbin /nologo /dependents .\build_artifacts\stringzillite.dll | findstr /r "^[^a-z].*\.dll" && exit /b 1 || exit /b 0
+  
   test_alpine:
     name: Alpine Linux
     runs-on: ubuntu-24.04
@@ -421,6 +478,8 @@ jobs:
           cmake --build build_artifacts --config RelWithDebInfo
       - name: Test C++
         run: build_artifacts/stringzilla_test_cpp20
+      - name: Check stringzillite is built correctly
+        run: test -z "$(ldd build_artifacts/libstringzillite.so | grep '.so' | grep '=>')"
 
         # Python
       - name: Build Python
@@ -451,7 +510,7 @@ jobs:
       ]
     strategy:
       matrix:
-        os: [ubuntu-24.04, macos-13, windows-2022]
+        os: [ubuntu-24.04, macos-14, windows-2022]
         python-version: ["36", "37", "38", "39", "310", "311", "312"]
     steps:
       - uses: actions/checkout@v4

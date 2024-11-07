@@ -144,7 +144,7 @@ __attribute__((aligned(64))) static sz_implementations_t sz_dispatch_table;
  *  @brief  Initializes a global static "virtual table" of supported backends
  *          Run it just once to avoiding unnecessary `if`-s.
  */
-static void sz_dispatch_table_init(void) {
+SZ_DYNAMIC void sz_dispatch_table_init(void) {
     sz_implementations_t *impl = &sz_dispatch_table;
     sz_capability_t caps = sz_capabilities();
     sz_unused(caps); //< Unused when compiling on pre-SIMD machines.
@@ -232,9 +232,20 @@ static void sz_dispatch_table_init(void) {
 }
 
 #if defined(_MSC_VER)
-#pragma section(".CRT$XCU", read)
-__declspec(allocate(".CRT$XCU")) void (*_sz_dispatch_table_init)() = sz_dispatch_table_init;
 
+/*
+ * Makes sure the sz_dispatch_table_init function is called at startup, from either an executable or when loading a DLL.
+ * The section name must be no more than 8 characters long, and must be between .CRT$XCA and .CRT$XCZ alphabetically
+ * (exclusive).
+ * The Mircrosft C++ compiler puts C++ initialisation code in .CRT$XCU, so avoid that section.
+ *
+ * Reference: https://learn.microsoft.com/en-us/cpp/c-runtime-library/crt-initialization?view=msvc-170
+ */
+#pragma comment(linker, "/INCLUDE:_sz_dispatch_table_init")
+#pragma section(".CRT$XCS", read)
+__declspec(allocate(".CRT$XCS")) void (*_sz_dispatch_table_init)() = sz_dispatch_table_init;
+
+// Called either from CRT code or out own _DLLMainCRTStartup, when a DLL is loaded.
 BOOL WINAPI DllMain(HINSTANCE hints, DWORD forward_reason, LPVOID lp) {
     switch (forward_reason) {
     case DLL_PROCESS_ATTACH:
@@ -246,6 +257,14 @@ BOOL WINAPI DllMain(HINSTANCE hints, DWORD forward_reason, LPVOID lp) {
     }
     return TRUE;
 }
+
+#if SZ_AVOID_LIBC
+// Called when the DLL is loaded, and ther is no CRT code.
+BOOL WINAPI _DllMainCRTStartup(HINSTANCE hints, DWORD forward_reason, LPVOID lp) {
+    DllMain(hints, forward_reason, lp);
+    return TRUE;
+}
+#endif
 
 #else
 __attribute__((constructor)) static void sz_dispatch_table_init_on_gcc_or_clang(void) { sz_dispatch_table_init(); }
@@ -389,9 +408,15 @@ SZ_DYNAMIC void sz_generate(sz_cptr_t alphabet, sz_size_t alphabet_size, sz_ptr_
 // SZ_DYNAMIC can't be use here for MSVC, because MSVC complains about different linkage (C2375), probably due to to the
 // CRT headers specifying the function as __declspec(dllimport), there might be a combination of defines that works. But
 // for now they will be manually exported using linker flags
+// Also when building for 32-bit we must add an underscore to the exported function name (becuase thats how __cdecl
+// functions are decorated in MSVC, see https://stackoverflow.com/questions/62753691)
 
 #if defined(_MSC_VER)
+#if SZ_DETECT_64_BIT
 #pragma comment(linker, "/export:memchr")
+#else
+#pragma comment(linker, "/export:_memchr")
+#endif
 void *__cdecl memchr(void const *s, int c_wide, size_t n) {
 #else
 SZ_DYNAMIC void *memchr(void const *s, int c_wide, size_t n) {
@@ -401,7 +426,11 @@ SZ_DYNAMIC void *memchr(void const *s, int c_wide, size_t n) {
 }
 
 #if defined(_MSC_VER)
+#if SZ_DETECT_64_BIT
 #pragma comment(linker, "/export:memcpy")
+#else
+#pragma comment(linker, "/export:_memcpy")
+#endif
 void *__cdecl memcpy(void *dest, void const *src, size_t n) {
 #else
 SZ_DYNAMIC void *memcpy(void *dest, void const *src, size_t n) {
@@ -411,7 +440,11 @@ SZ_DYNAMIC void *memcpy(void *dest, void const *src, size_t n) {
 }
 
 #if defined(_MSC_VER)
+#if SZ_DETECT_64_BIT
 #pragma comment(linker, "/export:memmove")
+#else
+#pragma comment(linker, "/export:_memmove")
+#endif
 void *__cdecl memmove(void *dest, void const *src, size_t n) {
 #else
 SZ_DYNAMIC void *memmove(void *dest, void const *src, size_t n) {
@@ -421,7 +454,11 @@ SZ_DYNAMIC void *memmove(void *dest, void const *src, size_t n) {
 }
 
 #if defined(_MSC_VER)
+#if SZ_DETECT_64_BIT
 #pragma comment(linker, "/export:memset")
+#else
+#pragma comment(linker, "/export:_memset")
+#endif
 void *__cdecl memset(void *s, int c, size_t n) {
 #else
 SZ_DYNAMIC void *memset(void *s, int c, size_t n) {
